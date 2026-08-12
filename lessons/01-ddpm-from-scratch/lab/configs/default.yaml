@@ -1,0 +1,74 @@
+# Default configuration for the DDPM lab (lesson 01).
+#
+# Override any key on the CLI:   uv run python scripts/train.py optim.lr=5e-4
+# Or use a different file:        uv run python scripts/train.py --config configs/small.yaml
+#
+# Values are sized for 6GB VRAM (RTX 2060) on MNIST.
+
+# --- Diffusion process (theory.md §3) ---------------------------------------
+diffusion:
+  num_timesteps: 1000   # T (theory.md §3)
+  beta_start: 1.0e-4    # β_1
+  beta_end: 0.02        # β_T
+  schedule: linear      # only "linear" is supported in lesson 1
+
+# --- Noise-prediction network ε_θ ------------------------------------------
+model:
+  type: unet           # "unet" (default, better quality) or "mlp" (transparent baseline)
+  in_channels: 1
+  out_channels: 1       # predict eps only (theory.md §15: variance is not learned)
+  # UNet-only fields (ignored when type == mlp):
+  base_channels: 64
+  channel_mults: [1, 2, 4]
+  unet_blocks: 2         # residual blocks per U-Net level
+  unet_time_embed_dim: 256
+  dropout: 0.0
+  # MLP-only fields (ignored when type == unet):
+  hidden_dim: 512
+  mlp_blocks: 4          # residual MLP blocks
+  mlp_time_embed_dim: 128
+  use_local_conv: true   # one 3×3 conv before flatten — minimal spatial bias
+  local_channels: 32     # feature maps for that conv layer
+
+# --- MNIST data -------------------------------------------------------------
+data:
+  data_dir: data
+  train_batch_size: 128
+  eval_batch_size: 256
+  num_workers: 4
+  val_size: 5000        # hold out from the 60k train set → 55k/5k/10k
+
+# --- Optimizer --------------------------------------------------------------
+optim:
+  type: adam
+  lr: 2.0e-4            # DDPM default
+  weight_decay: 0.0
+  betas: [0.9, 0.999]
+
+# --- Training ---------------------------------------------------------------
+train:
+  epochs: 20
+  max_steps: -1         # -1 = no cap (use epochs); set N to stop early (smoke test)
+  precision: "16-mixed" # use mixed precision on GPU for speed/memory; "32-true" to disable
+  seed: 42
+  gradient_clip_val: 1.0
+
+# --- Validation & visualization callbacks -----------------------------------
+callbacks:
+  sample_freq: 1        # generate samples every N epochs
+  num_samples: 64       # how many images per sample grid
+  sampler: ddim         # "ddim" (fast, default) or "ddpm" (slow, stochastic)
+  num_sample_steps: 25  # steps for the ddim sampler (ignored for ddpm)
+  eta: 0.0              # DDIM stochasticity (0 = deterministic, theory.md §18)
+  compare_samplers: true # also log a DDPM-vs-DDIM comparison grid
+
+# --- Metrics ----------------------------------------------------------------
+metrics:
+  num_t_buckets: 10     # bucket val loss by t into this many intervals
+  coverage_num_real: 2000  # how many real images to use as NN candidates
+
+# --- Paths (all gitignored) -------------------------------------------------
+paths:
+  checkpoint_dir: checkpoints
+  log_dir: runs
+  samples_dir: samples

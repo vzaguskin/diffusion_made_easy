@@ -1,0 +1,38 @@
+# Repository-wide ignore rules.
+# Per-lab .gitignore files repeat some of these for safety, but this root file
+# is the authoritative source so generated artifacts never leak into commits.
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python-version
+.mypy_cache/
+.pytest_cache/
+
+# --- AI/ML tooling artifacts ---
+.data/
+.cache/
+
+# --- Lab-generated artifacts (any lesson) ---
+# Each lesson's lab generates these at runtime; they must never be committed.
+**/data/MNIST/
+**/checkpoints/
+**/runs/
+**/samples/
+**/wandb/
+
+# --- Generated model / image files ---
+*.ckpt
+*.pt
+*.pth
+*.png
+*.jpg
+*.jpeg
+*.tfevents.*
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,24 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+context: |
+  Project: diffusion_made_easy
+  Goal: educational implementation of diffusion models from scratch — clear,
+  minimal, well-documented code for learning how diffusion (DDPM-style) and
+  related generative models work, rather than maximum performance.
+  Tech stack: Python, PyTorch.
+  Language: code/comments/docstrings in English; discussions and specs may be
+  in Russian or English.
+  Conventions: small focused modules, runnable examples, keep dependencies
+  minimal.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

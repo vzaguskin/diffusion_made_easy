@@ -1,0 +1,105 @@
+"""Stochastic DDPM sampler — theory.md §17 «Алгоритм генерации (inference)».
+
+This is the *Markov* reverse process: at every step we add fresh noise ``z ~ N(0,I)``,
+except on the last step (``t = 1``) where we return the mean ``mu`` directly to
+avoid a grainy final image (theory.md §17, "Зачем на последнем шаге добавляется
+случайный шум?").
+
+Algorithm (theory.md §17):
+    1. x_T ~ N(0, I)
+    2. for t = T, T-1, ..., 1:
+         a. eps_pred = eps_theta(x_t, t)
+         b. mu = (1/sqrt(alpha_t)) * (x_t - (1-alpha_t)/sqrt(1-alpha_bar_t) * eps_pred)
+         c. if t > 1: x_{t-1} = mu + sigma_t * z,  z ~ N(0, I)
+            else:     x_0 = mu
+    3. return x_0
+
+The variance ``sigma_t`` is taken from the schedule (we use ``beta_t`` here, the
+common "fixed small" choice; theory.md §15 says the variance is fixed, not
+predicted by the network).
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+import torch
+
+from ..core import DiffusionCore
+from ._util import randn_with_generator
+
+
+@torch.no_grad()
+def sample(
+    model: torch.nn.Module,
+    core: DiffusionCore,
+    shape: tuple[int, ...],
+    num_steps: Optional[int] = None,
+    *,
+    generator: Optional[torch.Generator] = None,
+    device: Optional[torch.device | str] = None,
+) -> torch.Tensor:
+    """Generate images with the stochastic DDPM sampler (theory.md §17).
+
+    Parameters
+    ----------
+    model : nn.Module
+        ε_θ network with signature ``model(x, t) -> eps``.
+    core : DiffusionCore
+        Owns the schedule. ``num_steps`` defaults to ``core.num_timesteps`` (the
+        sampler walks all T steps, as in theory.md §17).
+    shape : tuple
+        Batch shape, e.g. ``(64, 1, 28, 28)``.
+    generator : torch.Generator, optional
+        For reproducible sampling (fixes the starting noise and per-step noise).
+    device : optional
+        Defaults to ``core``'s device.
+
+    Returns
+    -------
+    Tensor
+        Generated images of shape ``shape``, in the same range the model was
+        trained on (normalized MNIST: zero-mean, unit-variance).
+    """
+    if num_steps is None:
+        num_steps = core.num_timesteps
+    if num_steps != core.num_timesteps:
+        raise ValueError(
+            "The DDPM sampler is Markov and must walk all T steps. For fewer steps "
+            f"use the DDIM sampler. (got num_steps={num_steps}, T={core.num_timesteps})"
+        )
+    device = device or core.betas.device
+
+    model.eval()
+    # Work in the model's dtype (float32) — the schedule is stored in float64 for
+    # precision but the network runs in float32.
+    work_dtype = next(model.parameters()).dtype
+
+    # Step 1: x_T ~ N(0, I)
+    x = randn_with_generator(shape, generator, device, work_dtype)
+
+    # Precompute sigma_t (variance of the reverse step). theory.md §15 fixes the
+    # variance; we use beta_t (a common choice). sqrt for the additive noise term.
+    # Cast to the working dtype so they combine cleanly with the float32 latents.
+    sigmas = torch.sqrt(core.betas.clamp_min(0.0)).to(device=device, dtype=work_dtype)
+    alphas = core.alphas.to(device=device, dtype=work_dtype)
+    alphas_cumprod = core.alphas_cumprod.to(device=device, dtype=work_dtype)
+
+    # Step 2: walk t = T-1, T-2, ..., 0 (0-based indices; theory is 1-based).
+    for t in reversed(range(core.num_timesteps)):
+        t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
+        # 2a: predict the noise
+        eps_pred = model(x, t_batch)
+        # 2b: mean of the reverse step (theory.md §17, eq. for mu)
+        alpha_t = alphas[t]
+        alpha_bar_t = alphas_cumprod[t]
+        mean = (1.0 / torch.sqrt(alpha_t)) * (
+            x - ((1.0 - alpha_t) / torch.sqrt(1.0 - alpha_bar_t)) * eps_pred
+        )
+        # 2c: add noise unless this is the last step (t == 0 -> produces x_0)
+        if t > 0:
+            z = randn_with_generator(shape, generator, device, x.dtype)
+            x = mean + sigmas[t] * z
+        else:
+            x = mean
+    return x
