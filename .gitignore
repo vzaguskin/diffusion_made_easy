@@ -32,6 +32,12 @@ __pycache__/
 *.jpeg
 *.tfevents.*
 
+# --- Exception: documentation images embedded in READMEs ---
+# `lessons/*/images/` holds curated illustrative images (training progress,
+# loss curves) that ARE part of the docs. Negate after the *.png rule above.
+!lessons/*/images/*.png
+!lessons/*/images/*.svg
+
 # --- Editors / OS ---
 .DS_Store
 .idea/
