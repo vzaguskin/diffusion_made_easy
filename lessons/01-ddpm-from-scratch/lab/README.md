@@ -6,6 +6,9 @@ watching every formula from the theory become a line of Python.
 
 The whole thing is ~1000 lines of heavily-commented code. **Read `theory.md`
 first** — every code comment references it by section (e.g. `theory.md §15`).
+For a guided tour of the noise-predictor architecture itself (blocks, skips,
+time embedding, attention), see **[`../unet.md`](../unet.md)** — the U-Net,
+opened up.
 
 ---
 
@@ -124,7 +127,7 @@ lab/
 │   ├── models/
 │   │   ├── common.py         ← shared sinusoidal time embedding
 │   │   ├── mlp.py            ← ε_θ as an MLP (the transparent baseline)
-│   │   ├── unet.py           ← ε_θ as a small U-Net (default; better quality)
+│   │   ├── unet.py           ← ε_θ as a small U-Net (default; better quality; see ../unet.md)
 │   │   └── __init__.py       ← build_model(cfg) factory
 │   ├── samplers/
 │   │   ├── ddpm.py           ← stochastic sampler (theory.md §17)
