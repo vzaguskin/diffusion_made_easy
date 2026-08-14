@@ -36,6 +36,7 @@ def sample(
     shape: tuple[int, ...],
     num_steps: Optional[int] = None,
     *,
+    sigma: str = "posterior",
     generator: Optional[torch.Generator] = None,
     device: Optional[torch.device | str] = None,
 ) -> torch.Tensor:
@@ -50,6 +51,10 @@ def sample(
         sampler walks all T steps, as in theory.md §17).
     shape : tuple
         Batch shape, e.g. ``(64, 1, 28, 28)``.
+    sigma : {"posterior", "beta"}
+        Choice of the fixed reverse-step variance σ_t (theory.md §15):
+        ``"posterior"`` (default) uses β̃_t from the §13 derivation and gives
+        better samples; ``"beta"`` is the simpler "small" choice.
     generator : torch.Generator, optional
         For reproducible sampling (fixes the starting noise and per-step noise).
     device : optional
@@ -78,12 +83,31 @@ def sample(
     # Step 1: x_T ~ N(0, I)
     x = randn_with_generator(shape, generator, device, work_dtype)
 
-    # Precompute sigma_t (variance of the reverse step). theory.md §15 fixes the
-    # variance; we use beta_t (a common choice). sqrt for the additive noise term.
-    # Cast to the working dtype so they combine cleanly with the float32 latents.
-    sigmas = torch.sqrt(core.betas.clamp_min(0.0)).to(device=device, dtype=work_dtype)
+    # --- Reverse-step variance sigma_t ---------------------------------------
+    # theory.md §15 fixes the variance (it is not learned); §13 derives the
+    # *posterior* variance of q(x_{t-1} | x_t, x_0):
+    #     beta_tilde_t = beta_t * (1 - alpha_bar_{t-1}) / (1 - alpha_bar_t)
+    # The DDPM paper compares two choices:
+    #   * sigma = "beta"     (the "small" choice)  — simpler, slightly worse;
+    #   * sigma = "posterior" (the "large" choice) — matches the derivation of
+    #     §13 and empirically gives better samples. This is our default.
     alphas = core.alphas.to(device=device, dtype=work_dtype)
     alphas_cumprod = core.alphas_cumprod.to(device=device, dtype=work_dtype)
+    if sigma == "posterior":
+        # alpha_bar_{t-1} for each t, with the convention alpha_bar_{-1} = 1.
+        alphas_cumprod_prev = torch.cat(
+            [torch.ones(1, device=device, dtype=work_dtype), alphas_cumprod[:-1]]
+        )
+        posterior_variance = core.betas.to(device=device, dtype=work_dtype) * (
+            1.0 - alphas_cumprod_prev
+        ) / (1.0 - alphas_cumprod).clamp_min(1e-20)
+        # At t = 0 the posterior variance is 0 — consistent with the last step
+        # adding no noise anyway.
+        sigmas = torch.sqrt(posterior_variance.clamp_min(0.0))
+    elif sigma == "beta":
+        sigmas = torch.sqrt(core.betas.clamp_min(0.0)).to(device=device, dtype=work_dtype)
+    else:
+        raise ValueError(f"sigma must be 'posterior' or 'beta', got {sigma!r}")
 
     # Step 2: walk t = T-1, T-2, ..., 0 (0-based indices; theory is 1-based).
     for t in reversed(range(core.num_timesteps)):

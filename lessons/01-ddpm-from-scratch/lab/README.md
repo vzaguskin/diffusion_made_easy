@@ -193,6 +193,9 @@ mirror; on network issues, retry or download the 4 gzip files manually into
 `data/MNIST/raw/`.
 
 **DDPM sampling is slow.** That's expected — 1000 steps × one network call each.
+(The sampler uses the *posterior* variance σ_t = √β̃_t from theory.md §13 — the
+DDPM paper's "large" choice, which samples slightly better than the plain √β_t;
+pass `sigma="beta"` to `samplers.ddpm.sample` to compare.)
 For exploration use DDIM with 25–50 steps (≈ 30–40× faster, similar quality).
 
 **The MLP produces noise, not digits — and that's the lesson.** A fully-connected
