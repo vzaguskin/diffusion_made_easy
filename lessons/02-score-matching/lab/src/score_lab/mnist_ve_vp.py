@@ -181,7 +181,7 @@ def sample_vp(
 @torch.no_grad()
 def sample_ve(
     model, schedule: VESchedule, shape, generator=None, device="cpu",
-    euler_sub: int = 5, corrector_steps: int = 2, corrector_scale: float = 0.05,
+    euler_sub: int = 5, corrector_steps: int = 10, corrector_scale: float = 0.15,
 ) -> torch.Tensor:
     """Simplified VE sampling: Euler drift down the σ ladder + Langevin corrector.
 
