@@ -75,14 +75,22 @@ def plot_score_field(
     s_true = true_fn(xy).detach().cpu().numpy()
     s_learned = learned_fn(xy).detach().cpu().numpy()
 
+    # Arrow sizing relative to the grid: an arrow spans ~80% of a cell, so the
+    # field stays readable at any grid density (a fixed scale gave arrows
+    # either invisible or overlapping). The learned grid is offset by half a
+    # cell — otherwise the red arrows sit exactly on top of the grey ones and
+    # hide them (both are unit-normalized).
+    spacing = 2 * lim / (n_grid - 1)
+    scale_key = 1.0 / (0.8 * spacing)      # unit arrow ≈ 0.8 · cell
+    xy_learned = xy + spacing / 2
+
     fig, ax = plt.subplots(figsize=(6.4, 5.6))
     if data is not None:
         d = data.cpu().numpy()
         ax.scatter(d[:, 0], d[:, 1], s=2, c=C_DATA, alpha=0.25, label="data")
 
-    scale_key = 25.0  # arrows per axis unit — keeps unit arrows readable
-    _quiver(ax, xy.numpy(), s_true, C_TRUE, f"true score", scale_key)
-    q = _quiver(ax, xy.numpy(), s_learned, C_LEARNED, "learned $s_θ$", scale_key)
+    _quiver(ax, xy.numpy(), s_true, C_TRUE, "true score", scale_key)
+    q = _quiver(ax, xy_learned.numpy(), s_learned, C_LEARNED, "learned $s_θ$", scale_key)
 
     # Colorbar on the learned field's log-magnitude.
     norm = np.linalg.norm(s_learned, axis=1)
@@ -153,9 +161,10 @@ def plot_trajectories(
         xy = _grid(lim, n_grid)
         s = field_fn(xy).detach().cpu().numpy()
         norm = np.linalg.norm(s, axis=1, keepdims=True).clip(1e-12)
+        spacing = 2 * lim / (n_grid - 1)
         ax.quiver(xy[:, 0], xy[:, 1], (s / norm)[:, 0], (s / norm)[:, 1],
-                  color=C_TRUE, scale=30, scale_units="xy", width=0.003,
-                  alpha=0.55, angles="xy")
+                  color=C_TRUE, scale=1.0 / (0.6 * spacing), scale_units="xy",
+                  width=0.003, alpha=0.55, angles="xy")
 
     n_traj = trajs_np.shape[1]
     cmap = plt.get_cmap("Blues")
