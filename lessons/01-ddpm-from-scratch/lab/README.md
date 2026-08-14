@@ -4,7 +4,7 @@ This lab turns the math of **`theory.md`** (a complete DDPM derivation) into
 runnable code. You train a model that learns to turn pure noise into MNIST digits,
 watching every formula from the theory become a line of Python.
 
-The whole thing is ~1000 lines of heavily-commented code. **Read `theory.md`
+The whole thing is ~2400 lines of heavily-commented code. **Read `theory.md`
 first** — every code comment references it by section (e.g. `theory.md §15`).
 For a guided tour of the noise-predictor architecture itself (blocks, skips,
 time embedding, attention), see **[`../unet.md`](../unet.md)** — the U-Net,

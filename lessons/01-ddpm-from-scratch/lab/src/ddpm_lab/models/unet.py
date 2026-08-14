@@ -35,9 +35,10 @@ class UNetConfig:
     base_channels: int = 64  # width at the top resolution
     channel_mults: tuple[int, ...] = (1, 2, 4)  # one per resolution level
     num_blocks: int = 2  # residual blocks per level
-    attention_resolutions: tuple[int, ...] = (7,)  # apply self-attn at these HxW
     time_embed_dim: int = 256
     dropout: float = 0.0
+    # NOTE: self-attention lives at the bottleneck only (7×7 here) — that is
+    # hard-coded in UNet.__init__ (self.mid), see unet.md §6 for the rationale.
 
 
 def _conv(c_in: int, c_out: int) -> nn.Conv2d:
@@ -138,7 +139,6 @@ class UNet(nn.Module):
         self.encoder_blocks = nn.ModuleList()
         self.encoder_downs = nn.ModuleList()
         channels = c0
-        in_res = self._input_resolution()  # assume square input
         for level, mult in enumerate(mults):
             out_channels = c0 * mult
             for _ in range(self.cfg.num_blocks):
@@ -147,7 +147,6 @@ class UNet(nn.Module):
             # downsample between levels (but not after the last level)
             if level < len(mults) - 1:
                 self.encoder_downs.append(Downsample(channels))
-                in_res //= 2
             else:
                 self.encoder_downs.append(nn.Identity())
 
@@ -181,10 +180,6 @@ class UNet(nn.Module):
         # --- Output ---------------------------------------------------------
         self.out_norm = nn.GroupNorm(8, c0)
         self.out_conv = _conv(c0, self.cfg.out_channels)
-
-    def _input_resolution(self) -> int:
-        # Configured for 28×28 (MNIST): 3 levels of /2 give 28 -> 14 -> 7.
-        return 28
 
     def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         """``x`` : [B, C, H, W], ``t`` : [B] -> predicted noise [B, C, H, W]."""

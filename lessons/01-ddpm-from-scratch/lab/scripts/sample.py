@@ -32,8 +32,19 @@ from ddpm_lab.samplers import build_sampler
 
 
 def _find_config_next_to_checkpoint(ckpt_path: Path) -> Path | None:
-    """Look for a ``*-config.yaml`` saved by train.py near the checkpoint dir."""
-    for cand in ckpt_path.parent.glob("*-config.yaml"):
+    """Find the config saved by train.py for this specific run.
+
+    Checkpoints are named ``<run>-best.ckpt`` / ``last.ckpt`` and train.py drops
+    ``<run>-config.yaml`` in the same dir — so match by run prefix first, and
+    only fall back to any config if the exact match isn't there (e.g. for a
+    hand-copied ``last.ckpt``).
+    """
+    stem = ckpt_path.name.rsplit("-", 1)[0] if "-best" in ckpt_path.name or "-last" in ckpt_path.name else None
+    if stem:
+        exact = ckpt_path.parent / f"{stem}-config.yaml"
+        if exact.exists():
+            return exact
+    for cand in sorted(ckpt_path.parent.glob("*-config.yaml"), reverse=True):
         return cand
     return None
 

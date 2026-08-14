@@ -54,8 +54,11 @@ def main() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save the resolved config next to the logs so every run is reproducible.
+    # Save the resolved config next to the logs *and* next to the checkpoints:
+    # scripts/sample.py looks for it in the checkpoint dir to rebuild the exact
+    # model that was trained (crucial for non-default model configs).
     save_config(cfg, log_dir / f"{run_name}-config.yaml")
+    save_config(cfg, ckpt_dir / f"{run_name}-config.yaml")
     print("Resolved config:\n", to_yaml(cfg))
 
     # --- Data ---------------------------------------------------------------
@@ -103,12 +106,19 @@ def main() -> None:
     # Defaults: 1.0 = use the full dataset. Set to a small int for quick checks.
     limit_train = cfg.train.get("limit_train_batches", 1.0)
     limit_val = cfg.train.get("limit_val_batches", 1.0)
+
+    precision = str(cfg.train.get("precision", "16-mixed"))
+    if not torch.cuda.is_available() and precision != "32-true":
+        # Mixed precision on CPU is emulated and painfully slow — auto-fallback.
+        print(f"[info] no CUDA detected: switching precision {precision} -> 32-true")
+        precision = "32-true"
+
     trainer = L.Trainer(
         max_epochs=int(cfg.train.epochs),
         max_steps=int(cfg.train.get("max_steps", -1)),
         accelerator="auto",
         devices="auto",
-        precision=str(cfg.train.get("precision", "16-mixed")),
+        precision=precision,
         gradient_clip_val=float(cfg.train.get("gradient_clip_val", 0.0)) or None,
         limit_train_batches=limit_train,
         limit_val_batches=limit_val,

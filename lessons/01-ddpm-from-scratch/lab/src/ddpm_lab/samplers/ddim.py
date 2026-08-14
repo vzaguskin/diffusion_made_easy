@@ -28,21 +28,18 @@ from ._util import randn_with_generator
 
 
 def _build_timestep_subset(num_timesteps: int, num_steps: int) -> torch.Tensor:
-    """Pick ``num_steps`` evenly spaced timesteps from ``[0, num_timesteps)``.
+    """Pick ``num_steps`` evenly spaced timesteps for the strided DDIM walk.
 
-    The subset is decreasing (we walk from large t to small t during sampling).
-    This is the standard DDIM strided schedule: it includes the largest valid
-    timestep (``num_timesteps - 1``) and excludes 0 (we stop at index 1 of the
-    subset, then take a final deterministic step to x0).
+    Standard schedule: ``linspace(0, T-1, num_steps)`` — i.e. it *includes*
+    ``t = T-1`` (so the starting noise ``x_T ~ N(0, I)`` matches the first
+    network call) and ends at ``t = 0`` (the final step produces ``x_0``).
+    Returned in decreasing order, deduplicated.
     """
     if num_steps < 1 or num_steps > num_timesteps:
         raise ValueError(f"num_steps must be in [1, {num_timesteps}], got {num_steps}")
-    # Evenly spaced in [0, T), then reversed. Includes T-1 (full noise) and a near-0 step.
-    step_ratio = num_timesteps / num_steps
-    cur = (torch.arange(num_steps) * step_ratio).round().long().flip(0)
-    # Ensure strictly decreasing and within bounds.
-    cur = torch.unique(cur, sorted=False)  # dedupe
-    return cur.sort(descending=True).values
+    ts = torch.linspace(0, num_timesteps - 1, num_steps).round().long().flip(0)
+    ts = torch.unique(ts, sorted=False)  # dedupe (possible for tiny num_steps)
+    return ts.sort(descending=True).values
 
 
 @torch.no_grad()
