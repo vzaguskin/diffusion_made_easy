@@ -2,7 +2,9 @@
 
 Trains two MiniUNets (identical architecture and hyperparameters):
 * VE branch — geometric σ ladder 80 → 0.01, additive forward noising;
-* VP branch — linear β as in lesson 01.
+* VP branch — linear β as in lesson 01;
+* VE-long branch — same VE schedule and seed, `ve_long_epochs` instead of
+  `epochs` (default ×4): shows VE catching up with more compute.
 
 Then samples side-by-side grids *from the same starting noise* and saves the
 loss-curve comparison. Artifacts → ``runs/ve_vs_vp/``.
@@ -70,6 +72,21 @@ def main() -> None:
                                 log_csv=out_dir / "loss_vp.csv")
     torch.save(vp_model.state_dict(), out_dir / "model_vp.pt")
 
+    # --- VE with a bigger budget: does it catch up? ---------------------------
+    # Same schedule and seed as the equal-budget VE branch, only more epochs —
+    # the loss curve shows the same trajectory extended, not a new run.
+    ve_long_epochs = int(section.ve_long_epochs)
+    if ve_long_epochs > int(section.epochs):
+        print("training VE-long branch (%d epochs)..." % ve_long_epochs)
+        ve_long_model = build_mnist_unet(cfg)
+        ve_long_losses = train_eps_model(
+            ve_long_model, loader, ve_sched, epochs=ve_long_epochs,
+            lr=float(section.lr), device=device, seed=int(section.seed),
+            log_csv=out_dir / "loss_ve_long.csv")
+        torch.save(ve_long_model.state_dict(), out_dir / "model_ve_long.pt")
+    else:
+        ve_long_model, ve_long_losses = ve_model, ve_losses
+
     # --- Side-by-side samples from the SAME starting noise (spec §ve-vp) ----
     n = int(section.n_samples)
     gen = torch.Generator(device=device).manual_seed(int(section.seed))
@@ -82,16 +99,21 @@ def main() -> None:
     x_vp = sample_vp(vp_model, vp_sched, (n, 1, 28, 28),
                      generator=torch.Generator(device=device)
                      .manual_seed(int(section.seed) + 1), device=device)
+    x_ve_long = sample_ve(ve_long_model, ve_sched, (n, 1, 28, 28),
+                          generator=torch.Generator(device=device)
+                          .manual_seed(int(section.seed) + 1), device=device)
     save_sample_grid(x_ve, out_dir / "samples_ve.png", "VE samples")
     save_sample_grid(x_vp, out_dir / "samples_vp.png", "VP samples")
+    save_sample_grid(x_ve_long, out_dir / "samples_ve_long.png", "VE long-budget samples")
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4.6))
-    show = lambda ax, x, ttl: ax.imshow(
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.6))
+    show = lambda ax, x: ax.imshow(
         (x[:16].detach().cpu() * 0.3081 + 0.1307).clamp(0, 1)
         .reshape(2, 8, 28, 28).permute(0, 2, 1, 3).reshape(56, 224), cmap="gray_r")
-    show(axes[0], x_ve, "VE"); axes[0].set_title("VE", fontsize=10); axes[0].axis("off")
-    show(axes[1], x_vp, "VP"); axes[1].set_title("VP", fontsize=10); axes[1].axis("off")
-    fig.suptitle("Same starting noise: VE (left) vs VP (right)", y=0.98)
+    show(axes[0], x_ve); axes[0].set_title("VE (equal budget)", fontsize=10); axes[0].axis("off")
+    show(axes[1], x_ve_long); axes[1].set_title("VE (%d epochs)" % ve_long_epochs, fontsize=10); axes[1].axis("off")
+    show(axes[2], x_vp); axes[2].set_title("VP (equal budget)", fontsize=10); axes[2].axis("off")
+    fig.suptitle("Same starting noise: VE equal/long budget vs VP", y=0.98)
     fig.savefig(out_dir / "samples_side_by_side.png", bbox_inches="tight")
     plt.close(fig)
 
@@ -101,8 +123,12 @@ def main() -> None:
             color="#d62728", lw=1.5)
     ax.plot(range(1, len(vp_losses) + 1), vp_losses, label="VP (ε-MSE)",
             color="#1f77b4", lw=1.5)
+    if len(ve_long_losses) > len(ve_losses):
+        ax.plot(range(1, len(ve_long_losses) + 1), ve_long_losses,
+                label="VE long (ε-MSE)", color="#d62728", lw=1.5, ls="--",
+                alpha=0.7)
     ax.set_xlabel("epoch"); ax.set_ylabel("loss"); ax.legend(); ax.grid(alpha=0.3)
-    ax.set_title("Equal-budget training: VE vs VP")
+    ax.set_title("Equal-budget VE vs VP, and VE with a bigger budget")
     fig.savefig(out_dir / "loss_curves.png", bbox_inches="tight")
     plt.close(fig)
 

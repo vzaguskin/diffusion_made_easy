@@ -44,6 +44,7 @@ mnist_ve_vp:
   ve: {sigma_max: 5.0, sigma_min: 0.01, n_levels: 200}
   vp: {beta_start: 0.0001, beta_end: 0.02, num_timesteps: 1000}
   epochs: 5
+  ve_long_epochs: 20         # "VE ×4 budget" branch: VE catches up with more compute
   batch_size: 128
   lr: 0.0002
   seed: 42
