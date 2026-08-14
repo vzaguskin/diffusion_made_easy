@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python-version
+.pytest_cache/
+
+# Lab-generated artifacts
+data/
+runs/
+wandb/
+
+*.ckpt
+*.pt
+*.pth
+# NOTE: PNG plots are the lab's OUTPUT — but they are generated, so they stay
+# ignored here; curated images for the README live in ../images/ (tracked by
+# the repo root .gitignore negation) and are copied there explicitly.
+
+.DS_Store
+.idea/
+.vscode/

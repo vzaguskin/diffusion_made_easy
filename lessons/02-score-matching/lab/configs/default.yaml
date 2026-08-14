@@ -1,0 +1,56 @@
+# Lesson 02 lab defaults — Denoising Score Matching + annealed Langevin (2D),
+# then VE vs VP on MNIST. Every field can be overridden via CLI: `key=value`.
+
+# --- 2D toy data (theory.md §6) -------------------------------------------
+data:
+  dataset: gaussians8        # gaussians8 | moons | swiss-roll
+  n_samples: 2000            # points drawn for plots/heatmaps
+  gaussians8: {std: 0.12, radius: 1.6}
+  moons: {n_components: 100, component_std: 0.08}
+  swiss-roll: {n_components: 200, component_std: 0.06}
+
+# --- Score network (§2) ----------------------------------------------------
+model:
+  hidden_dim: 256
+  n_layers: 4
+  sigma_features: 16         # Fourier features of log σ
+  use_residual: true
+
+# --- σ ladder (§8) ---------------------------------------------------------
+sigmas:
+  n_levels: 10
+  sigma_max: 1.0             # ≈ data diameter: noise covers everything
+  sigma_min: 0.02            # ≈ narrowest mode width
+
+# --- Langevin sampling (§4, §8) --------------------------------------------
+langevin:
+  steps_per_level: 100
+  step_scale: 0.05           # ε_i = step_scale · σ_i² (see langevin.py docstring)
+  n_trajectories: 16         # paths drawn on the trajectory plot
+  n_chains: 300              # sample-cloud size for the annealing grid
+
+# --- 2D training -----------------------------------------------------------
+train:
+  epochs: 30
+  steps_per_epoch: 200
+  batch_size: 256
+  lr: 0.001
+  seed: 42
+
+# --- VE vs VP on MNIST (§9–§10) ---------------------------------------------
+mnist_ve_vp:
+  # VE σ_max: NCSN's ≈80 assumes its data scale; with unit-variance normalized
+  # MNIST the equivalent "SNR ≈ 0" start is σ_max ≈ 5 (see README).
+  ve: {sigma_max: 5.0, sigma_min: 0.01, n_levels: 200}
+  vp: {beta_start: 0.0001, beta_end: 0.02, num_timesteps: 1000}
+  epochs: 5
+  batch_size: 128
+  lr: 0.0002
+  seed: 42
+  n_samples: 64              # side-by-side sample grids
+  model: {base_channels: 32, channel_mults: [1, 2, 4], num_blocks: 2}
+
+# --- Paths -------------------------------------------------------------------
+paths:
+  run_dir: runs/2d           # artifacts of train_2d.py (overridden per run)
+  images_dir: ../images      # lesson images (optional copy target)

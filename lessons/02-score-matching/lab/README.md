@@ -1,0 +1,126 @@
+# Score Matching Lab — Lesson 02
+
+Denoising score matching + annealed Langevin на 2D-датасетах, затем VE vs VP
+на MNIST. Всё в одной лабе, всё воспроизводимо через `uv`.
+
+## Quickstart
+
+```bash
+uv sync                                   # окружение
+uv run python -m pytest tests/ -q         # математика: score, DSM, Ланжевен
+uv run python scripts/train_2d.py         # 2D-пайплайн (~2 мин)
+uv run python scripts/compare_ve_vp.py    # VE vs VP на MNIST (~1–1.5 ч на CPU, минуты на GPU)
+```
+
+Любое поле конфига переопределяется из CLI:
+
+```bash
+uv run python scripts/train_2d.py data.dataset=moons paths.run_dir=runs/moons
+uv run python scripts/compare_ve_vp.py mnist_ve_vp.epochs=1   # быстрый прогон
+```
+
+Артефакты (PNG + CSV) пишутся в `runs/<exp>/`.
+
+## Карта «раздел теории → код»
+
+| Теория (theory.md) | Код | Что там |
+|---|---|---|
+| §2 Score-сеть `s_θ(x, σ)` | `src/score_lab/models.py` | `ScoreMLP`: (x, Fourier(log σ)) → score; одна сеть на все уровни лестницы |
+| §4 Сэмплирование через Langevin dynamics | `src/score_lab/langevin.py` | `langevin_sample`: `x ← x + ε/2·s + √ε·z`, траектории, `mode_coverage` |
+| §6 Score гауссиана — строительный блок | `src/score_lab/toy_data.py` | `GaussianMixture2D`: `log_p`, аналитический `score` (взвешенные ответственностями компоненты); `gaussians8`/`moons`/`swiss-roll` |
+| §7 Denoising score matching | `src/score_lab/dsm.py` | `dsm_loss`: цель `−ε/σ` = `∇log q(x̃\|x)`; VE-зашумление `x̃ = x + σε` |
+| §8 Многоуровневый шум | `src/score_lab/config.py` (`geometric_sigma_ladder`), `langevin.py` (`annealed_langevin`), `train_loop.py` | геометрическая лестница σ; шаг `ε_i = step_scale·σ_i²`; состояние переносится между уровнями |
+| §9 Score и ε — одна сеть в разных одеждах | `src/score_lab/mnist_ve_vp.py` (докстринг + обучение ε) | `score = −ε/σ_t` для VE, `score = −ε/√(1−ᾱ_t)` для VP — одна и та же сеть |
+| §10 VE vs VP | `src/score_lab/mnist_ve_vp.py`, `scripts/compare_ve_vp.py` | `VESchedule` (геом. σ 80→0.01, аддитивный forward) и `VPSchedule` (линейные β как в лабе 1); равный бюджет, side-by-side сэмплы |
+
+## Как читать графики (runs/<exp>/)
+
+### Плотность и поле score
+
+![density](../images/lab2_density.png)
+![score field](../images/lab2_score_field.png)
+
+### Траектории и annealing
+
+![trajectories](../images/lab2_trajectories.png)
+![annealing grid](../images/lab2_annealing_grid.png)
+
+### Single-σ collapse (демо провала §8)
+
+![single sigma collapse](../images/lab2_single_sigma_collapse.png)
+
+### VE vs VP на MNIST (§9–§10)
+
+![VE vs VP samples](../images/lab2_ve_vs_vp.png)
+![VE vs VP loss](../images/lab2_ve_vp_loss.png)
+
+
+Цвета везде одни: **данные — синие точки, истинный score — серые стрелки,
+выученный — красные**.
+
+* **`density.png`** — heatmap `log p(x)` + сэмплы. Максимум плотности должен
+  проходить вдоль данных.
+* **`score_field_*.png`** — quiver-поле: серые стрелки (истина) vs красные
+  (сеть) при большом/среднем/малом σ. Стрелки нормированы по длине — важное
+  направление; магнитуда выученного поля видна в colorbar (`log₁₀‖s‖`).
+  В high-density областях красные должны совпадать с серыми по направлению.
+* **`trajectories.png`** — пути annealed-Ланжевена поверх quiver-поля:
+  старт (`×`) → стекание к модам → финальные точки (красные маркеры) в зонах
+  высокой плотности.
+* **`annealing_grid.png`** — «видео-кадр» лабы: строки — уровни σ (от большого
+  к малому), колонки — шаги внутри уровня. Смотрите, как облако размазано
+  наверху и конденсируется в узкие моды к низу.
+* **`single_sigma_collapse.png`** — демо провала §8: тот же старт и тот же
+  финальный шаг, но без лестницы. Числа coverage в заголовках панелей.
+* **`runs/ve_vs_vp/`** — `samples_side_by_side.png` (VE слева, VP справа,
+  одинаковый стартовый шум), `loss_curves.png` (кривые обеих веток).
+
+## Тюнинг Ланжевена
+
+Шаг на уровне *i*: `ε_i = step_scale · σ_i²` (`langevin.step_scale`). Почему
+квадрат σ: возле моды σ-сглаженной плотности update — OU-процесс со
+стационарным разбросом ≈ ширина моды, т.е. масштабно-инвариантен на каждом
+уровне. Фиксированный ε либо взорвётся на малых σ, либо заморозится на
+больших.
+
+Симптомы и лечение:
+
+* сэмплы «дрожат» и не собираются в моды → уменьшите `step_scale` (0.05 → 0.02);
+* сэмплы разлетаются/NaN → ещё меньше `step_scale`;
+* слишком медленно → больше `langevin.steps_per_level` с меньшим `step_scale`,
+  или больше уровней `sigmas.n_levels` (мельче лестница — короче прыжки).
+
+## Связь score ↔ ε (обе ветки MNIST)
+
+Обе ветки обучаются предсказывать ε простым MSE. §9: для гауссовского
+зашумления score зашумлённой плотности — это `−ε / std шума`:
+
+* VE: `x_t = x₀ + σ_t·ε` → `s_θ(x_t, t) = −ε_θ(x_t, t)/σ_t`
+* VP: `x_t = √ᾱ_t·x₀ + √(1−ᾱ_t)·ε` → `s_θ(x_t, t) = −ε_θ(x_t, t)/√(1−ᾱ_t)`
+
+Т.е. ε-сеть из лабы 1 и score-сеть этой лабы — одна сеть в разных
+параметризациях; differs only bookkeeping σ(t).
+
+## Известные упрощения
+
+* **GMM-аппроксимация** для `moons`/`swiss-roll`: «истинный score» — это score
+  GMM-приближения (≥50 узких компонент вдоль кривой), не «настоящая» плотность.
+  На σ ≥ ширины компонент визуально неотличимо.
+* **VE σ_max и шкала данных**: NCSN использует σ_max≈80 в своей шкале данных;
+  MNIST тут нормализован к unit-variance (как в лабе 1), поэтому эквивалентный
+  старт с SNR≈0 — σ_max≈5. Дефолт конфига — 5.0.
+* **Упрощённый VE-сэмплер**: вместо честного annealed Ланжевена на каждом
+  уровне — Euler-шаг по probability-flow ODE (`x ← x − Δσ·ε_θ`, с
+  подразбиением) + пара Ланжевен-корректор-шагов на новом уровне (та же
+  формула `x ← x + (α/2)s + √α z`, α = scale·σ², что и в 2D-части). Голый
+  predict-x̂₀-прыжок не работает: при большом σ ошибка ε даёт ошибку x̂₀ ~ σ·δε.
+* **VP-сэмплер** — ancestral DDPM из лабы 1 (полные T шагов, posterior variance).
+
+## Регенерация картинок README
+
+```bash
+uv run python scripts/train_2d.py paths.run_dir=runs/gaussians8
+uv run python scripts/train_2d.py data.dataset=moons paths.run_dir=runs/moons
+uv run python scripts/compare_ve_vp.py
+# затем вручную скопировать удачные PNG в ../images/ (закоммичено в репо)
+```
