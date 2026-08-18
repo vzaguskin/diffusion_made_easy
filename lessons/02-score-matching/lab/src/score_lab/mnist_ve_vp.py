@@ -215,6 +215,7 @@ def sample_ddim(
 def sample_ve(
     model, schedule: VESchedule, shape, generator=None, device="cpu",
     euler_sub: int = 5, corrector_steps: int = 10, corrector_scale: float = 0.15,
+    level_stride: int = 1,
 ) -> torch.Tensor:
     """Simplified VE sampling: Euler drift down the σ ladder + Langevin corrector.
 
@@ -235,15 +236,21 @@ def sample_ve(
     sigmas = schedule.sigmas.to(device)
     g = generator
     x = torch.randn(shape, generator=g, device=device) * sigmas[0]
-    for i in reversed(range(schedule.n_levels)):
+    # ``level_stride`` visits every k-th training level (k = stride): the model
+    # still sees indices it was trained on, but the chain is shorter — the
+    # predictor's Δσ spans ``stride`` ladder steps at once.
+    visited = list(range(schedule.n_levels - 1, -1, -level_stride))
+    for pos, i in enumerate(visited):
+        has_next = pos + 1 < len(visited)
+        nxt_idx = visited[pos + 1] if has_next else 0
+        nxt = sigmas[nxt_idx] if has_next else torch.zeros((), device=device)
         for _ in range(euler_sub):
             tb = torch.full((shape[0],), i, device=device, dtype=torch.long)
-            nxt = sigmas[i - 1] if i > 0 else torch.zeros((), device=device)
             ds = (sigmas[i] - nxt) / euler_sub
             x = x - ds * model(x, tb)
-        if i > 0:
-            tn = torch.full((shape[0],), i - 1, device=device, dtype=torch.long)
-            s = float(sigmas[i - 1])
+        if has_next:
+            tn = torch.full((shape[0],), nxt_idx, device=device, dtype=torch.long)
+            s = float(sigmas[nxt_idx])
             alpha = corrector_scale * s * s
             for _ in range(corrector_steps):
                 score = -model(x, tn) / s          # §9: score = −ε/σ
