@@ -11,6 +11,7 @@ uv run python -m pytest tests/ -q         # математика: score, DSM, Л
 uv run python scripts/train_2d.py         # 2D-пайплайн (~2 мин)
 uv run python scripts/compare_ve_vp.py    # VE vs VP на MNIST (~1–1.5 ч на CPU, минуты на GPU)
 uv run python scripts/eval_per_level.py    # пер-уровневый лосс VE vs VP (после compare)
+uv run python scripts/compare_solvers.py   # SDE/ODE-солверы на готовых чекпойнтах (~1 мин на GPU)
 ```
 
 Любое поле конфига переопределяется из CLI:
@@ -33,6 +34,10 @@ uv run python scripts/compare_ve_vp.py mnist_ve_vp.epochs=1   # быстрый �
 | §8 Многоуровневый шум | `src/score_lab/config.py` (`geometric_sigma_ladder`), `langevin.py` (`annealed_langevin`), `train_loop.py` | геометрическая лестница σ; шаг `ε_i = step_scale·σ_i²`; состояние переносится между уровнями |
 | §9 Score и ε — одна сеть в разных одеждах | `src/score_lab/mnist_ve_vp.py` (докстринг + обучение ε) | `score = −ε/σ_t` для VE, `score = −ε/√(1−ᾱ_t)` для VP — одна и та же сеть |
 | §10 VE vs VP | `src/score_lab/mnist_ve_vp.py`, `scripts/compare_ve_vp.py` | `VESchedule` (геом. σ 80→0.01, аддитивный forward) и `VPSchedule` (линейные β как в лабе 1); равный бюджет, side-by-side сэмплы |
+| §11–12 Wiener, forward SDE | `src/score_lab/sde.py` | VE: `dx = σ(t)√(2ln r)·dW`; VP: `dx = −½β(t)x·dt + √β(t)·dW`, `t ∈ [0,1]`, β — дискретная × (T−1) |
+| §13 Reverse SDE | `sde.py: reverse_sde_drift` | `f − g²·s_θ` через `s = −ε/std` (§9); Anderson (1982) |
+| §14 Probability flow ODE | `sde.py: pf_ode_drift` | `f − ½g²·s_θ` — детерминированный двойник SDE |
+| §15 Солверы, NFE | `src/score_lab/solvers.py`, `scripts/compare_solvers.py` | Euler-Maruyama (SDE) + Euler/Heun/RK4 (ODE), счётчик NFE + wall-clock, бенчмарк quality-vs-NFE |
 
 ## Как читать графики (runs/<exp>/)
 
@@ -100,6 +105,48 @@ uv run python scripts/compare_ve_vp.py mnist_ve_vp.epochs=1   # быстрый �
 * VE: `x_t = x₀ + σ_t·ε` → `s_θ(x_t, t) = −ε_θ(x_t, t)/σ_t`
 * VP: `x_t = √ᾱ_t·x₀ + √(1−ᾱ_t)·ε` → `s_θ(x_t, t) = −ε_θ(x_t, t)/√(1−ᾱ_t)`
 
+## SDE/ODE-солверы (§11–15)
+
+`compare_solvers.py` берёт **уже обученные** VE/VP модели и крутит на них
+матрицу методов: {Euler-Maruyama на reverse SDE} × {Euler, Heun, RK4 на
+PF-ODE} × NFE-бюджеты {40, 100, 400}. Все методы внутри ветки стартуют из
+одного стартового облака — сравниваем только численную схему.
+
+```bash
+uv run python scripts/compare_ve_vp.py    # сначала: чекпойнты в runs/ve_vs_vp/
+uv run python scripts/compare_solvers.py  # → runs/ve_vs_vp/solvers/
+```
+
+### Как читать график quality-vs-NFE
+
+![quality vs nfe](../images/lab2_quality_vs_nfe.png)
+
+* **Ось X — NFE** (число вызовов модели, log-шкала): честная «валюта»
+  сравнения — Heun тратит 2 вызова на шаг, RK4 — четыре.
+* **Ось Y — eps-MSE сэмплов**: зашумляем каждый сэмпл на нескольких уровнях
+  и меряем, как хорошо модель его денойзит. Сэмплы на выученном многообразии
+  денойзятся как настоящие данные, уплывшие — хуже. Пунктирные линии —
+  baseline на *реальных* MNIST-картинках: пол каждой ветки.
+* **Вывод из запуска**: у VP детерминированный PF-ODE уже при 40 NFE
+  достигает floor'а реальных данных (0.031 vs 0.036), а стохастическому
+  Euler-Maruyama нужно ~400 NFE для того же. Heun/RK4 при равном NFE не
+  выигрывают: drift кусочно-постоянен из-за квантования `t → индекс
+  обучения`, и многостадийные схемы на нём теряют порядок. У VE все методы
+  эквивалентны (~0.64 при floor 0.60): ε-модель VE сама по себе грубее.
+* Сетки сэмплов по каждому прогону — в `solvers/<ветка>_<метод>_nfe<N>.png`;
+  полный протокол с временем — `solvers/solver_benchmark.csv`.
+
+### Ограничения
+
+* eps-MSE — **внутренняя** метрика (модель оценивает свои сэмплы):
+  сравнивать солверы внутри ветки можно, ветки между собой — нет. Reference
+  метрика качества (FID) требует внешних зависимостей и здесь сознательно
+  не используется.
+* DPM-Solver и другие солверы, эксплуатирующие полуаналитическую структуру
+  PF-ODE, — тема отдельного урока про солверы.
+* Время (wall-clock) на GPU почти линейно по NFE и почти не зависит от
+  метода: узкое место — вызовы сети, а не арифметика шага.
+
 Т.е. ε-сеть из лабы 1 и score-сеть этой лабы — одна сеть в разных
 параметризациях; differs only bookkeeping σ(t).
 
@@ -164,5 +211,7 @@ uv run python scripts/compare_ve_vp.py mnist_ve_vp.epochs=1   # быстрый �
 uv run python scripts/train_2d.py paths.run_dir=runs/gaussians8
 uv run python scripts/train_2d.py data.dataset=moons paths.run_dir=runs/moons
 uv run python scripts/compare_ve_vp.py
+uv run python scripts/eval_per_level.py
+uv run python scripts/compare_solvers.py
 # затем вручную скопировать удачные PNG в ../images/ (закоммичено в репо)
 ```
