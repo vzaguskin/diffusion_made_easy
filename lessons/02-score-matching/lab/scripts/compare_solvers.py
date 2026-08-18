@@ -43,12 +43,11 @@ from score_lab.mnist_ve_vp import (
     VESchedule,
     VPSchedule,
     sample_ddim,
-    sample_ve,
     sample_vp,
     save_sample_grid,
 )
+from score_lab.solvers import euler_maruyama, nfe_to_grid, ode_solver, pc_langevin_ve
 from score_lab.sde import ContinuousVE, ContinuousVP
-from score_lab.solvers import euler_maruyama, nfe_to_grid, ode_solver
 
 SDE_METHODS = ["euler_maruyama"]
 ODE_METHODS = ["euler", "heun", "rk4"]
@@ -56,10 +55,12 @@ ODE_METHODS = ["euler", "heun", "rk4"]
 # continuous solvers. Both only make sense on the VP schedule.
 DISCRETE_VP_METHODS = ["ddim", "ddpm_ancestral"]
 # NCSN predictor-corrector (Euler + Langevin corrector) — the only scheme
-# that produces digits with this lab's rough VE model (see README). The three
-# presets sweep the NFE budget to show digits *emerging* (600 → hints,
-# 1400 → half legible, 3000 → most cells digits).
-VE_PC_PRESETS = [(1, 2), (2, 5), (5, 10)]   # (euler_sub, corrector_steps) per level
+# that produces digits with this lab's rough VE model (see README). Presets
+# are (m_levels, euler_sub, corrector_steps); NFE = m_levels·(sub+corr).
+# With corrector_steps = 1 the digits emerge monotonically: 40 = ghosts,
+# 100 = soft readable digits, 400 = sharper (heavier correctors only add
+# speckle — the model's eps-error amplified by the Langevin noise).
+VE_PC_PRESETS = [(20, 1, 1), (50, 1, 1), (200, 1, 1)]
 
 
 def _unnormalize(x: torch.Tensor) -> torch.Tensor:
@@ -185,15 +186,10 @@ def main() -> None:
                 gen_run = torch.Generator(device=device).manual_seed(seed + 1)
                 with torch.no_grad():
                     if method == "pc_langevin":
-                        sub, corr = budget
-                        t0 = _time.perf_counter()
-                        x = sample_ve(model, ve_sched, (n, 1, 28, 28),
-                                      generator=gen_run, device=device,
-                                      euler_sub=sub, corrector_steps=corr)
-                        if device.startswith("cuda"):
-                            torch.cuda.synchronize()
-                        res = SimpleNamespace(x=x, nfe=ve_sched.n_levels * (sub + corr),
-                                              seconds=_time.perf_counter() - t0)
+                        m_levels, sub, corr = budget
+                        res = pc_langevin_ve(branch, model, x_start.clone(), m_levels,
+                                             euler_sub=sub, corrector_steps=corr,
+                                             generator=gen_run)
                         budget = res.nfe  # tag with the real NFE
                     elif method == "ddim":
                         t0 = _time.perf_counter()
