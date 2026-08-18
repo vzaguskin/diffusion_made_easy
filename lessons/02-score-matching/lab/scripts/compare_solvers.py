@@ -43,6 +43,7 @@ from score_lab.mnist_ve_vp import (
     VESchedule,
     VPSchedule,
     sample_ddim,
+    sample_ve,
     sample_vp,
     save_sample_grid,
 )
@@ -54,6 +55,11 @@ ODE_METHODS = ["euler", "heun", "rk4"]
 # Discrete lesson-01 samplers, for the wall-clock comparison with the
 # continuous solvers. Both only make sense on the VP schedule.
 DISCRETE_VP_METHODS = ["ddim", "ddpm_ancestral"]
+# NCSN predictor-corrector (Euler + Langevin corrector) — the only scheme
+# that produces digits with this lab's rough VE model (see README). The three
+# presets sweep the NFE budget to show digits *emerging* (600 → hints,
+# 1400 → half legible, 3000 → most cells digits).
+VE_PC_PRESETS = [(1, 2), (2, 5), (5, 10)]   # (euler_sub, corrector_steps) per level
 
 
 def _unnormalize(x: torch.Tensor) -> torch.Tensor:
@@ -131,7 +137,7 @@ def main() -> None:
     seed = int(section.seed)
     budgets = [int(b) for b in section.nfe_budgets]
     solver_methods = ODE_METHODS if bool(section.include_rk4) else ["euler", "heun"]
-    methods = {"ve": SDE_METHODS + solver_methods,
+    methods = {"ve": SDE_METHODS + solver_methods + ["pc_langevin"],
                "vp": SDE_METHODS + solver_methods + DISCRETE_VP_METHODS}
 
     # warm up CUDA kernels so the first timed run is not an outlier
@@ -162,17 +168,34 @@ def main() -> None:
         gen = torch.Generator(device=device).manual_seed(seed)
         x_start = branch.prior_sample((n, 1, 28, 28), generator=gen, device=device)
         for method in methods[branch_name]:
-            # ddpm_ancestral is a single full-T run; budgets don't apply
-            method_budgets = [None] if method == "ddpm_ancestral" else budgets
+            # ddpm_ancestral is a single full-T run; pc_langevin runs its own
+            # (sub, corrector) presets — neither follows the NFE budgets
+            if method == "ddpm_ancestral":
+                method_budgets = [None]
+            elif method == "pc_langevin":
+                method_budgets = list(VE_PC_PRESETS)
+            else:
+                method_budgets = budgets
             for budget in method_budgets:
-                if method in DISCRETE_VP_METHODS:
+                if method in DISCRETE_VP_METHODS or method == "pc_langevin":
                     grid = None
                 else:
                     grid = nfe_to_grid(budget, "euler" if method == "euler_maruyama" else method,
                                        torch.device(device))
                 gen_run = torch.Generator(device=device).manual_seed(seed + 1)
                 with torch.no_grad():
-                    if method == "ddim":
+                    if method == "pc_langevin":
+                        sub, corr = budget
+                        t0 = _time.perf_counter()
+                        x = sample_ve(model, ve_sched, (n, 1, 28, 28),
+                                      generator=gen_run, device=device,
+                                      euler_sub=sub, corrector_steps=corr)
+                        if device.startswith("cuda"):
+                            torch.cuda.synchronize()
+                        res = SimpleNamespace(x=x, nfe=ve_sched.n_levels * (sub + corr),
+                                              seconds=_time.perf_counter() - t0)
+                        budget = res.nfe  # tag with the real NFE
+                    elif method == "ddim":
                         t0 = _time.perf_counter()
                         x = sample_ddim(model, vp_sched, (n, 1, 28, 28), n_steps=budget,
                                         generator=gen_run, device=device)
@@ -198,7 +221,7 @@ def main() -> None:
                 diverged = bool(torch.isnan(res.x).any() or torch.isinf(res.x).any())
                 if diverged:
                     res.x = torch.nan_to_num(res.x, nan=0.0, posinf=1.0, neginf=-1.0)
-                steps = 0 if method in ("ddim", "ddpm_ancestral") else len(grid) - 1
+                steps = 0 if method in ("ddim", "ddpm_ancestral", "pc_langevin") else len(grid) - 1
                 row = {
                     "method": method, "branch": branch_name, "steps": steps,
                     "nfe": res.nfe, "seconds": round(res.seconds, 4),
@@ -208,7 +231,7 @@ def main() -> None:
                     "diverged": int(diverged),
                 }
                 rows.append(row)
-                samples[(branch_name, method, budget)] = res.x
+                samples[(branch_name, method, res.nfe)] = res.x
                 tag = f"{branch_name}_{method}_nfe{res.nfe}"
                 save_sample_grid(res.x, out_dir / f"{tag}.png",
                                  f"{tag}  ({res.nfe} NFE, {res.seconds:.2f}s)")
@@ -216,7 +239,8 @@ def main() -> None:
                       f"sharp={row['sharpness']} eps_mse={row['eps_mse']} div={row['diverged']}")
 
         # --- Montage: rows = methods, cols = NFE budgets (same start noise) ---
-        montage_methods = [m for m in methods[branch_name] if m != "ddpm_ancestral"]
+        montage_methods = [m for m in methods[branch_name]
+                           if m not in ("ddpm_ancestral", "pc_langevin")]
         fig, axes = plt.subplots(len(montage_methods), len(budgets),
                                  figsize=(2.6 * len(budgets), 2.5 * len(montage_methods)))
         for r, method in enumerate(montage_methods):
@@ -237,6 +261,25 @@ def main() -> None:
                     dpi=120)
         plt.close(fig)
 
+        # --- VE-only: the predictor-corrector NFE emergence strip ------------
+        if branch_name == "ve":
+            pc_runs = sorted((nfe, x) for (b, meth, nfe), x in samples.items()
+                             if b == "ve" and meth == "pc_langevin")
+            fig, axes = plt.subplots(1, len(pc_runs), figsize=(2.8 * len(pc_runs), 3.0))
+            if len(pc_runs) == 1:
+                axes = [axes]
+            for ax, (nfe, x) in zip(axes, pc_runs):
+                img = (_unnormalize(x[:16].detach().cpu())
+                       .reshape(2, 8, 28, 28).permute(0, 2, 1, 3).reshape(56, 224))
+                ax.imshow(img, cmap="gray_r")
+                ax.set_title(f"{nfe} NFE", fontsize=10)
+                ax.set_xticks([]); ax.set_yticks([])
+            fig.suptitle("VE predictor-corrector: digits emerge with the budget "
+                         "(same model, same start)", y=1.02)
+            fig.tight_layout()
+            fig.savefig(out_dir / "ve_pc_emergence.png", bbox_inches="tight", dpi=120)
+            plt.close(fig)
+
     with open(out_dir / "solver_benchmark.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
@@ -246,7 +289,7 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(6.6, 4.2))
     colors = {"ve": "#d62728", "vp": "#1f77b4"}
     markers = {"euler_maruyama": "o", "euler": "s", "heun": "^", "rk4": "D",
-               "ddim": "v", "ddpm_ancestral": "*"}
+               "ddim": "v", "ddpm_ancestral": "*", "pc_langevin": "P"}
     for row in rows:
         if row["diverged"] or row["method"] == "real_data":
             continue
