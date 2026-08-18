@@ -57,10 +57,11 @@ DISCRETE_VP_METHODS = ["ddim", "ddpm_ancestral"]
 # NCSN predictor-corrector (Euler + Langevin corrector) — the only scheme
 # that produces digits with this lab's rough VE model (see README). Presets
 # are (m_levels, euler_sub, corrector_steps); NFE = m_levels·(sub+corr).
-# With corrector_steps = 1 the digits emerge monotonically: 40 = ghosts,
-# 100 = soft readable digits, 400 = sharper (heavier correctors only add
-# speckle — the model's eps-error amplified by the Langevin noise).
-VE_PC_PRESETS = [(20, 1, 1), (50, 1, 1), (200, 1, 1)]
+# Selected per budget with the VP-judge metric (the VP model's eps-MSE on
+# the samples; calibrated: real data 0.03, pure noise 0.67): more NFE makes
+# this model WORSE (0.13 at 40 → 0.19 at 400) — Langevin noise compounds the
+# eps-model error over a longer chain. Soft digits peak around 100 NFE.
+VE_PC_PRESETS = [(10, 2, 2), (20, 2, 3), (100, 1, 3)]
 
 
 def _unnormalize(x: torch.Tensor) -> torch.Tensor:
