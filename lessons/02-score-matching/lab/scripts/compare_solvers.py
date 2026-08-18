@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import csv
 import sys
+import time as _time
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib
 
@@ -40,6 +42,8 @@ from score_lab.mnist_ve_vp import (
     MNIST_STD,
     VESchedule,
     VPSchedule,
+    sample_ddim,
+    sample_vp,
     save_sample_grid,
 )
 from score_lab.sde import ContinuousVE, ContinuousVP
@@ -47,6 +51,9 @@ from score_lab.solvers import euler_maruyama, nfe_to_grid, ode_solver
 
 SDE_METHODS = ["euler_maruyama"]
 ODE_METHODS = ["euler", "heun", "rk4"]
+# Discrete lesson-01 samplers, for the wall-clock comparison with the
+# continuous solvers. Both only make sense on the VP schedule.
+DISCRETE_VP_METHODS = ["ddim", "ddpm_ancestral"]
 
 
 def _unnormalize(x: torch.Tensor) -> torch.Tensor:
@@ -111,15 +118,21 @@ def main() -> None:
     }
     models = {}
     for name in branches:
+        # prefer the long-trained VE checkpoint if the ve-vp run produced one
+        ckpt = f"model_{name}_long.pt" if name == "ve" and \
+            (ve_vp_dir / "model_ve_long.pt").exists() else f"model_{name}.pt"
         m = build_mnist_unet(cfg).to(device).eval()
-        m.load_state_dict(torch.load(ve_vp_dir / f"model_{name}.pt",
-                                     map_location=device, weights_only=True))
+        m.load_state_dict(torch.load(ve_vp_dir / ckpt, map_location=device,
+                                     weights_only=True))
+        print(f"  {name}: checkpoint {ckpt}")
         models[name] = m
 
     n = int(section.n_samples)
     seed = int(section.seed)
     budgets = [int(b) for b in section.nfe_budgets]
-    methods = SDE_METHODS + ODE_METHODS if bool(section.include_rk4) else SDE_METHODS + ["euler", "heun"]
+    solver_methods = ODE_METHODS if bool(section.include_rk4) else ["euler", "heun"]
+    methods = {"ve": SDE_METHODS + solver_methods,
+               "vp": SDE_METHODS + solver_methods + DISCRETE_VP_METHODS}
 
     # warm up CUDA kernels so the first timed run is not an outlier
     dummy = branches["ve"].prior_sample((2, 1, 28, 28), device=device)
@@ -148,13 +161,34 @@ def main() -> None:
         # same starting cloud for every method of this branch
         gen = torch.Generator(device=device).manual_seed(seed)
         x_start = branch.prior_sample((n, 1, 28, 28), generator=gen, device=device)
-        for method in methods:
-            for budget in budgets:
-                grid = nfe_to_grid(budget, "euler" if method == "euler_maruyama" else method,
-                                   torch.device(device))
+        for method in methods[branch_name]:
+            # ddpm_ancestral is a single full-T run; budgets don't apply
+            method_budgets = [None] if method == "ddpm_ancestral" else budgets
+            for budget in method_budgets:
+                if method in DISCRETE_VP_METHODS:
+                    grid = None
+                else:
+                    grid = nfe_to_grid(budget, "euler" if method == "euler_maruyama" else method,
+                                       torch.device(device))
                 gen_run = torch.Generator(device=device).manual_seed(seed + 1)
                 with torch.no_grad():
-                    if method == "euler_maruyama":
+                    if method == "ddim":
+                        t0 = _time.perf_counter()
+                        x = sample_ddim(model, vp_sched, (n, 1, 28, 28), n_steps=budget,
+                                        generator=gen_run, device=device)
+                        if device.startswith("cuda"):
+                            torch.cuda.synchronize()
+                        res = SimpleNamespace(x=x, nfe=budget,
+                                              seconds=_time.perf_counter() - t0)
+                    elif method == "ddpm_ancestral":
+                        t0 = _time.perf_counter()
+                        x = sample_vp(model, vp_sched, (n, 1, 28, 28),
+                                      generator=gen_run, device=device)
+                        if device.startswith("cuda"):
+                            torch.cuda.synchronize()
+                        res = SimpleNamespace(x=x, nfe=vp_sched.num_timesteps,
+                                              seconds=_time.perf_counter() - t0)
+                    elif method == "euler_maruyama":
                         drift = lambda x, t, b=branch, m=model: b.reverse_sde_drift(m, x, t)
                         res = euler_maruyama(drift, branch.diffusion, x_start.clone(),
                                              grid, generator=gen_run)
@@ -164,8 +198,9 @@ def main() -> None:
                 diverged = bool(torch.isnan(res.x).any() or torch.isinf(res.x).any())
                 if diverged:
                     res.x = torch.nan_to_num(res.x, nan=0.0, posinf=1.0, neginf=-1.0)
+                steps = 0 if method in ("ddim", "ddpm_ancestral") else len(grid) - 1
                 row = {
-                    "method": method, "branch": branch_name, "steps": len(grid) - 1,
+                    "method": method, "branch": branch_name, "steps": steps,
                     "nfe": res.nfe, "seconds": round(res.seconds, 4),
                     "sharpness": round(sharpness(res.x), 5),
                     "speckle": round(speckle(res.x), 5),
@@ -174,16 +209,17 @@ def main() -> None:
                 }
                 rows.append(row)
                 samples[(branch_name, method, budget)] = res.x
-                tag = f"{branch_name}_{method}_nfe{budget}"
+                tag = f"{branch_name}_{method}_nfe{res.nfe}"
                 save_sample_grid(res.x, out_dir / f"{tag}.png",
                                  f"{tag}  ({res.nfe} NFE, {res.seconds:.2f}s)")
                 print(f"  {tag}: nfe={res.nfe} t={res.seconds:.2f}s "
                       f"sharp={row['sharpness']} eps_mse={row['eps_mse']} div={row['diverged']}")
 
         # --- Montage: rows = methods, cols = NFE budgets (same start noise) ---
-        fig, axes = plt.subplots(len(methods), len(budgets),
-                                 figsize=(2.6 * len(budgets), 2.5 * len(methods)))
-        for r, method in enumerate(methods):
+        montage_methods = [m for m in methods[branch_name] if m != "ddpm_ancestral"]
+        fig, axes = plt.subplots(len(montage_methods), len(budgets),
+                                 figsize=(2.6 * len(budgets), 2.5 * len(montage_methods)))
+        for r, method in enumerate(montage_methods):
             for c, budget in enumerate(budgets):
                 ax = axes[r, c] if len(methods) > 1 else axes[c]
                 x = samples[(branch_name, method, budget)][:16].detach().cpu()
@@ -209,7 +245,8 @@ def main() -> None:
     # --- quality vs NFE -------------------------------------------------------
     fig, ax = plt.subplots(figsize=(6.6, 4.2))
     colors = {"ve": "#d62728", "vp": "#1f77b4"}
-    markers = {"euler_maruyama": "o", "euler": "s", "heun": "^", "rk4": "D"}
+    markers = {"euler_maruyama": "o", "euler": "s", "heun": "^", "rk4": "D",
+               "ddim": "v", "ddpm_ancestral": "*"}
     for row in rows:
         if row["diverged"] or row["method"] == "real_data":
             continue

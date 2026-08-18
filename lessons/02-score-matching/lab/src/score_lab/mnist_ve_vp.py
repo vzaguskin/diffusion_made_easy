@@ -179,6 +179,39 @@ def sample_vp(
 
 
 @torch.no_grad()
+def sample_ddim(
+    model, schedule: VPSchedule, shape, n_steps: int = 100, eta: float = 0.0,
+    generator=None, device="cpu",
+) -> torch.Tensor:
+    """DDIM (η=0 default): the classical discrete form of the VP PF-ODE.
+
+    Subsamples ``n_steps`` timesteps from the schedule and jumps directly
+    between them: ``x_{τ₋₁} = √ᾱ_{τ₋₁}·(x_τ − √(1−ᾱ_τ)·ε̂)/√ᾱ_τ +
+    √(1−ᾱ_{τ₋₁})·ε̂`` (+ η-scaled noise for η > 0). With η = 0 the map is
+    deterministic — same role as the ODE solvers in ``solvers.py``, but
+    derived from the discrete posterior instead of integrating the ODE.
+    NFE = n_steps.
+    """
+    model.eval()
+    ab = schedule.alphas_cumprod.to(device).float()
+    tau = torch.linspace(schedule.num_timesteps - 1, 0, n_steps).long()
+    x = torch.randn(shape, generator=generator, device=device)
+    for i in range(len(tau)):  # tau itself already runs T-1 → 0
+        tb = torch.full((shape[0],), tau[i], device=device, dtype=torch.long)
+        eps = model(x, tb)
+        ab_t = ab[tau[i]]
+        ab_prev = ab[tau[i + 1]] if i + 1 < len(tau) else torch.ones((), device=device)
+        x0_hat = (x - (1 - ab_t).sqrt() * eps) / ab_t.sqrt().clamp_min(1e-8)
+        dir = (1 - ab_prev).clamp_min(0).sqrt() * eps
+        x = ab_prev.sqrt() * x0_hat + dir
+        if eta > 0 and i > 0:
+            sigma = eta * ((1 - ab_prev) / (1 - ab_t).clamp_min(1e-8)).sqrt() \
+                * (1 - ab_t / ab_prev).sqrt()
+            x = x + sigma * torch.randn(shape, generator=generator, device=device)
+    return x
+
+
+@torch.no_grad()
 def sample_ve(
     model, schedule: VESchedule, shape, generator=None, device="cpu",
     euler_sub: int = 5, corrector_steps: int = 10, corrector_scale: float = 0.15,
