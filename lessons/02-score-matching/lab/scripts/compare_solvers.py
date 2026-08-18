@@ -61,7 +61,7 @@ DISCRETE_VP_METHODS = ["ddim", "ddpm_ancestral"]
 # the samples; calibrated: real data 0.03, pure noise 0.67): more NFE makes
 # this model WORSE (0.13 at 40 → 0.19 at 400) — Langevin noise compounds the
 # eps-model error over a longer chain. Soft digits peak around 100 NFE.
-VE_PC_PRESETS = [(10, 2, 2), (20, 2, 3), (100, 1, 3)]
+VE_PC_PRESETS = [(10, 2, 2), (20, 2, 3), (100, 1, 3), (200, 1, 2), (160, 1, 4)]
 
 
 def _unnormalize(x: torch.Tensor) -> torch.Tensor:
