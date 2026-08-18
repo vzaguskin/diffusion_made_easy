@@ -121,6 +121,12 @@ uv run python scripts/compare_solvers.py  # → runs/ve_vs_vp/solvers/
 
 ![quality vs nfe](../images/lab2_quality_vs_nfe.png)
 
+Сэмплы «солверы × бюджеты» (строки — методы, колонки — NFE; внутри ветки
+стартовый шум один и тот же):
+
+![VP solvers montage](../images/lab2_vp_solver_montage.png)
+![VE solvers montage](../images/lab2_ve_solver_montage.png)
+
 * **Ось X — NFE** (число вызовов модели, log-шкала): честная «валюта»
   сравнения — Heun тратит 2 вызова на шаг, RK4 — четыре.
 * **Ось Y — eps-MSE сэмплов**: зашумляем каждый сэмпл на нескольких уровнях

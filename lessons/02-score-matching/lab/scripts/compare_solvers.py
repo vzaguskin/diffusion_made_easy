@@ -129,6 +129,7 @@ def main() -> None:
         torch.cuda.synchronize()
 
     rows = []
+    samples: dict[tuple, torch.Tensor] = {}
     # Baseline: real MNIST under each model — the quality floor to compare
     # solver runs against (a perfect sampler should land near its branch's floor).
     from score_lab.mnist_ve_vp import mnist_loaders
@@ -172,11 +173,33 @@ def main() -> None:
                     "diverged": int(diverged),
                 }
                 rows.append(row)
+                samples[(branch_name, method, budget)] = res.x
                 tag = f"{branch_name}_{method}_nfe{budget}"
                 save_sample_grid(res.x, out_dir / f"{tag}.png",
                                  f"{tag}  ({res.nfe} NFE, {res.seconds:.2f}s)")
                 print(f"  {tag}: nfe={res.nfe} t={res.seconds:.2f}s "
                       f"sharp={row['sharpness']} eps_mse={row['eps_mse']} div={row['diverged']}")
+
+        # --- Montage: rows = methods, cols = NFE budgets (same start noise) ---
+        fig, axes = plt.subplots(len(methods), len(budgets),
+                                 figsize=(2.6 * len(budgets), 2.5 * len(methods)))
+        for r, method in enumerate(methods):
+            for c, budget in enumerate(budgets):
+                ax = axes[r, c] if len(methods) > 1 else axes[c]
+                x = samples[(branch_name, method, budget)][:16].detach().cpu()
+                img = (_unnormalize(x)
+                       .reshape(2, 8, 28, 28).permute(0, 2, 1, 3).reshape(56, 224))
+                ax.imshow(img, cmap="gray_r")
+                ax.set_title(f"{budget} NFE", fontsize=9 if c else 10)
+                if c == 0:
+                    ax.set_ylabel(method, fontsize=10)
+                ax.set_xticks([]); ax.set_yticks([])
+        fig.suptitle(f"{branch_name.upper()}: solvers × NFE budgets (same starting noise)",
+                     y=0.995)
+        fig.tight_layout()
+        fig.savefig(out_dir / f"{branch_name}_solver_montage.png", bbox_inches="tight",
+                    dpi=120)
+        plt.close(fig)
 
     with open(out_dir / "solver_benchmark.csv", "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
