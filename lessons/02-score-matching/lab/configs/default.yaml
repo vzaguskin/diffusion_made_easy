@@ -58,6 +58,23 @@ solvers:
   seed: 42
   include_rk4: true            # rk4 costs 4 NFE/step — off to speed up smoke runs
 
+# --- EDM-preconditioned VE branch (theory.md §17) -----------------------------
+edm:
+  epochs: 20                  # same budget as the naive ve_long branch
+  batch_size: 128
+  lr: 0.0002
+  seed: 42
+  sigma_data: 1.0             # unit-variance normalized MNIST
+  p_mean: 0.0                 # log-normal sigma sampling, median σ=1 — covers
+  p_std: 1.6                  # the whole [0.01, 5] sampler range (Karras's
+                              # -1.2/1.2 assumes their σ/data scales; with our
+                              # σ_max=5 it left σ>0.5 undertrained)
+  sigma_max: 5.0
+  sigma_min: 0.01
+  rho: 7.0                    # polynomial sigma grid for Heun
+  budgets: [40, 100, 200, 400, 600, 800, 1000]  # sampler NFE points for the strip
+  n_samples: 64
+
 # --- Paths -------------------------------------------------------------------
 paths:
   run_dir: runs/2d           # artifacts of train_2d.py (overridden per run)
